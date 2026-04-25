@@ -31,6 +31,8 @@ DATE_COLUMNS = {
     "functional_failure_date",
     "recovery_failure_date",
     "maintenance_burden_failure_date",
+    "maintenance_burden_warning_date",
+    "burden_trigger_date",
     "service_cap_date",
     "final_lifetime_end_date",
     "extended_first_date_rolling365_below_37",
@@ -38,6 +40,7 @@ DATE_COLUMNS = {
     "extended_functional_failure_date",
     "extended_recovery_failure_date",
     "extended_maintenance_burden_failure_date",
+    "extended_maintenance_burden_warning_date",
     "extended_service_cap_date",
     "extended_final_lifetime_end_date",
 }
@@ -179,6 +182,33 @@ def _maintenance_burden(intervals: pd.Series, count: int) -> tuple[float, float,
     return annual_count, avg_interval, min_interval, flag
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return bool(value)
+
+
+def _burden_warning_values(life_row: pd.DataFrame) -> dict[str, object]:
+    if life_row.empty or "maintenance_burden_flag" not in life_row.columns:
+        return {
+            "flag": False,
+            "date": pd.NaT,
+            "reason": "",
+            "annual_count": np.nan,
+            "avg_interval": np.nan,
+            "min_interval": np.nan,
+        }
+    row = life_row.iloc[0]
+    return {
+        "flag": _truthy(row.get("maintenance_burden_flag", False)),
+        "date": row.get("maintenance_burden_warning_date", pd.NaT),
+        "reason": row.get("maintenance_burden_reason", ""),
+        "annual_count": row.get("burden_trigger_annual_count", np.nan),
+        "avg_interval": row.get("burden_trigger_avg_interval", np.nan),
+        "min_interval": row.get("burden_trigger_min_interval", np.nan),
+    }
+
+
 def _long_life_reason(
     status: str,
     current_rolling: float,
@@ -186,10 +216,13 @@ def _long_life_reason(
     annual_maintenance: float,
     hmax_trend: float,
     rolling_last: float,
+    maintenance_burden_flag: bool,
 ) -> str:
     if status == "lifetime_end":
         return "30年内已触发寿命终止"
     reasons: list[str] = []
+    if maintenance_burden_flag:
+        reasons.append("维护负担已触发预警，需要第三问优化")
     if np.isfinite(current_rolling) and current_rolling >= 80:
         reasons.append("当前rolling365水平较高")
     if np.isfinite(cycle_decay) and cycle_decay > -0.2:
@@ -235,8 +268,8 @@ def _build_long_life_diagnostics(
         hmax_at_30y = float(param["h_max_initial"]) + float(param["hmax_trend_used"]) * (30 * 365 - 1)
         life_row = lifetime[(lifetime["device_id"] == device_id) & (lifetime["model_name"] == MODEL_MAIN)]
         status = str(life_row["status"].iloc[0]) if len(life_row) else ""
-        final_failure_type = str(life_row["final_failure_type"].iloc[0]) if len(life_row) and "final_failure_type" in life_row else ""
-        burden_flag = bool(burden_flag or final_failure_type == "excessive_maintenance_burden")
+        warning = _burden_warning_values(life_row)
+        warning_flag = bool(warning["flag"])
         rows.append(
             {
                 "device_id": device_id,
@@ -248,7 +281,12 @@ def _build_long_life_diagnostics(
                 "annual_maintenance_count_30y": annual_count,
                 "avg_maintenance_interval_30y": avg_interval,
                 "min_maintenance_interval_30y": min_interval,
-                "maintenance_burden_flag": burden_flag,
+                "maintenance_burden_flag": warning_flag,
+                "burden_trigger_date": warning["date"],
+                "burden_trigger_reason": warning["reason"],
+                "burden_trigger_annual_count": warning["annual_count"],
+                "burden_trigger_avg_interval": warning["avg_interval"],
+                "burden_trigger_min_interval": warning["min_interval"],
                 "h_max_initial": param["h_max_initial"],
                 "hmax_trend_used": param["hmax_trend_used"],
                 "hmax_at_10y": max(0.0, hmax_at_10y),
@@ -262,6 +300,7 @@ def _build_long_life_diagnostics(
                     annual_count,
                     float(param["hmax_trend_used"]),
                     rolling_last,
+                    warning_flag,
                 ),
             }
         )

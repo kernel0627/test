@@ -26,7 +26,6 @@ COMMISSION_DATE = pd.Timestamp("2022-04-01")
 FAILURE_PRIORITY = {
     "hmax_depleted": 1,
     "unrecoverable_below_37": 2,
-    "excessive_maintenance_burden": 3,
     "functional_failure": 4,
     "service_cap_reached": 5,
 }
@@ -126,6 +125,17 @@ def _maintenance_burden_after_add(
         or (np.isfinite(min_interval) and min_interval < 30)
     )
     return count, avg_interval, min_interval, burden
+
+
+def _maintenance_burden_reason(count: int, avg_interval: float, min_interval: float) -> str:
+    reasons: list[str] = []
+    if count > 8:
+        reasons.append("rolling_365d_maintenance_count_gt_8")
+    if np.isfinite(avg_interval) and avg_interval < 45:
+        reasons.append("rolling_365d_avg_interval_lt_45")
+    if np.isfinite(min_interval) and min_interval < 30:
+        reasons.append("rolling_365d_min_interval_lt_30")
+    return ";".join(reasons)
 
 
 def _maintenance_window_metrics(maintenance_dates: list[pd.Timestamp], current_date: pd.Timestamp) -> tuple[int, float, float]:
@@ -272,6 +282,11 @@ def simulate_future_paths(
             local_schedule_rows: list[dict[str, object]] = []
             service_cap_scenario = str(param.get("service_cap_scenario", "neutral"))
             service_cap_years = float(param.get("service_cap_years", 15.0))
+            maintenance_burden_warning_date = pd.NaT
+            maintenance_burden_reason = ""
+            burden_trigger_annual_count = math.nan
+            burden_trigger_avg_interval = math.nan
+            burden_trigger_min_interval = math.nan
 
             for day_index, date in enumerate(dates):
                 month = int(date.month)
@@ -304,17 +319,24 @@ def simulate_future_paths(
                     use_global_major_fallback=use_global_major_fallback,
                 )
                 rho_used_source = ""
-                if maintenance_type and not any(
-                    item in candidates for item in ["hmax_depleted", "unrecoverable_below_37"]
-                ):
+                if maintenance_type and not candidates:
                     projected_count, projected_avg, projected_min, projected_burden = _maintenance_burden_after_add(
                         maintenance_dates, date
                     )
                     if projected_burden:
-                        candidates.append("excessive_maintenance_burden")
-                        maintenance_count_365d = max(projected_count - 1, 0)
+                        maintenance_count_365d = projected_count
                         avg_interval_365d = projected_avg
                         min_interval_365d = projected_min
+                        if pd.isna(maintenance_burden_warning_date):
+                            maintenance_burden_warning_date = date
+                            maintenance_burden_reason = _maintenance_burden_reason(
+                                projected_count,
+                                projected_avg,
+                                projected_min,
+                            )
+                            burden_trigger_annual_count = projected_count
+                            burden_trigger_avg_interval = projected_avg
+                            burden_trigger_min_interval = projected_min
 
                 failure_type = _best_failure(candidates)
                 is_terminal_day = bool(failure_type)
@@ -388,6 +410,12 @@ def simulate_future_paths(
                         "maintenance_count_365d": maintenance_count_365d,
                         "avg_maintenance_interval_365d": avg_interval_365d,
                         "min_maintenance_interval_365d": min_interval_365d,
+                        "maintenance_burden_flag": pd.notna(maintenance_burden_warning_date),
+                        "maintenance_burden_warning_date": maintenance_burden_warning_date,
+                        "maintenance_burden_reason": maintenance_burden_reason,
+                        "burden_trigger_annual_count": burden_trigger_annual_count,
+                        "burden_trigger_avg_interval": burden_trigger_avg_interval,
+                        "burden_trigger_min_interval": burden_trigger_min_interval,
                         "is_terminal_day": is_terminal_day,
                         "failure_type": failure_type,
                     }

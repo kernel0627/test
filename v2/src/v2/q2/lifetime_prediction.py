@@ -12,7 +12,6 @@ COMMISSION_DATE = pd.Timestamp("2022-04-01")
 FAILURE_PRIORITY = {
     "hmax_depleted": 1,
     "unrecoverable_below_37": 2,
-    "excessive_maintenance_burden": 3,
     "functional_failure": 4,
     "service_cap_reached": 5,
 }
@@ -72,7 +71,27 @@ def build_lifetime_predictions(
         terminal_date = pd.Timestamp(terminal["date"].iloc[0]) if len(terminal) else pd.NaT
         terminal_type = str(terminal["failure_type"].iloc[0]) if len(terminal) else ""
         recovery_date = terminal_date if terminal_type in {"hmax_depleted", "unrecoverable_below_37"} else pd.NaT
-        burden_date = terminal_date if terminal_type == "excessive_maintenance_burden" else pd.NaT
+        if "maintenance_burden_flag" in group.columns:
+            burden_rows = group[group["maintenance_burden_flag"].fillna(False).astype(bool)]
+        else:
+            burden_rows = pd.DataFrame()
+        if len(burden_rows):
+            burden_warning_date = pd.to_datetime(
+                burden_rows["maintenance_burden_warning_date"].dropna().iloc[0],
+                errors="coerce",
+            )
+            burden_warning_flag = True
+            burden_reason = str(burden_rows["maintenance_burden_reason"].dropna().iloc[0])
+            burden_trigger_annual_count = burden_rows["burden_trigger_annual_count"].dropna().iloc[0]
+            burden_trigger_avg_interval = burden_rows["burden_trigger_avg_interval"].dropna().iloc[0]
+            burden_trigger_min_interval = burden_rows["burden_trigger_min_interval"].dropna().iloc[0]
+        else:
+            burden_warning_date = pd.NaT
+            burden_warning_flag = False
+            burden_reason = ""
+            burden_trigger_annual_count = np.nan
+            burden_trigger_avg_interval = np.nan
+            burden_trigger_min_interval = np.nan
         service_cap_date = commission + pd.to_timedelta(float(param.get("service_cap_years", 15.0)) * 365.25, unit="D")
         if service_cap_date > prediction_start + pd.Timedelta(days=horizon_days):
             service_cap_date = pd.NaT
@@ -80,7 +99,6 @@ def build_lifetime_predictions(
             "functional_failure": functional_date,
             "hmax_depleted": terminal_date if terminal_type == "hmax_depleted" else pd.NaT,
             "unrecoverable_below_37": terminal_date if terminal_type == "unrecoverable_below_37" else pd.NaT,
-            "excessive_maintenance_burden": burden_date,
             "service_cap_reached": service_cap_date,
         }
         final_date, final_type = _earliest_failure(candidates)
@@ -107,7 +125,13 @@ def build_lifetime_predictions(
                 "first_date_rolling365_below_37": functional_date,
                 "functional_failure_date": functional_date,
                 "recovery_failure_date": recovery_date,
-                "maintenance_burden_failure_date": burden_date,
+                "maintenance_burden_failure_date": pd.NaT,
+                "maintenance_burden_warning_date": burden_warning_date,
+                "maintenance_burden_flag": burden_warning_flag,
+                "maintenance_burden_reason": burden_reason,
+                "burden_trigger_annual_count": burden_trigger_annual_count,
+                "burden_trigger_avg_interval": burden_trigger_avg_interval,
+                "burden_trigger_min_interval": burden_trigger_min_interval,
                 "service_cap_date": service_cap_date,
                 "final_lifetime_end_date": final_output_date,
                 "final_remaining_life_years": remaining,
@@ -150,6 +174,12 @@ def build_extended_lifetime_predictions(
             "functional_failure_date": "extended_functional_failure_date",
             "recovery_failure_date": "extended_recovery_failure_date",
             "maintenance_burden_failure_date": "extended_maintenance_burden_failure_date",
+            "maintenance_burden_warning_date": "extended_maintenance_burden_warning_date",
+            "maintenance_burden_flag": "extended_maintenance_burden_flag",
+            "maintenance_burden_reason": "extended_maintenance_burden_reason",
+            "burden_trigger_annual_count": "extended_burden_trigger_annual_count",
+            "burden_trigger_avg_interval": "extended_burden_trigger_avg_interval",
+            "burden_trigger_min_interval": "extended_burden_trigger_min_interval",
             "service_cap_date": "extended_service_cap_date",
             "final_lifetime_end_date": "extended_final_lifetime_end_date",
             "final_remaining_life_years": "extended_final_remaining_life_years",
