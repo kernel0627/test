@@ -43,6 +43,7 @@ DATE_COLUMNS = {
     "extended_maintenance_burden_warning_date",
     "extended_service_cap_date",
     "extended_final_lifetime_end_date",
+    "preferred_life_date",
 }
 
 
@@ -149,6 +150,12 @@ def _build_comparison(
         else:
             preferred = "recovery_ratio_main"
             reason = "恢复比例模型使用 device/global rho，且回测未显著差于固定增益。"
+        if preferred == "fixed_gain_baseline":
+            preferred_date = fixed_date
+            preferred_years = fixed_years
+        else:
+            preferred_date = main_date
+            preferred_years = main_years
         note = reason
         rows.append(
             {
@@ -163,6 +170,8 @@ def _build_comparison(
                 "rho_reliable_flag": bool(param["rho_reliable_flag"]),
                 "rho_used_source_summary": source_summary,
                 "preferred_model": preferred,
+                "preferred_life_date": preferred_date,
+                "preferred_remaining_years": preferred_years,
                 "selection_reason": reason,
                 "note": note,
             }

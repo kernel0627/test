@@ -7,10 +7,6 @@ import pandas as pd
 from .paths import Q2Paths
 
 
-def _read_csv(path: Path) -> pd.DataFrame:
-    return pd.read_csv(path, encoding="utf-8-sig") if path.exists() else pd.DataFrame()
-
-
 def _fmt(value: object, digits: int = 2, empty: str = "-") -> str:
     if value is None or pd.isna(value):
         return empty
@@ -21,7 +17,7 @@ def _fmt(value: object, digits: int = 2, empty: str = "-") -> str:
 
 def _date(value: object) -> str:
     if value is None or pd.isna(value) or str(value) in {"", "nan", "NaT"}:
-        return "未触发"
+        return "-"
     return str(value)[:10]
 
 
@@ -39,81 +35,81 @@ def _md_table(headers: list[str], rows: list[list[object]]) -> str:
     return "\n".join([header, sep, *body])
 
 
-def _list_devices(values: pd.Series) -> str:
-    devices = sorted([str(v) for v in values.dropna().unique()], key=_device_sort_key)
-    return "、".join(devices) if devices else "无"
+def _sort_devices(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "device_id" not in df.columns:
+        return df
+    return df.sort_values("device_id", key=lambda s: s.map(_device_sort_key))
 
 
-def _metric_rows(backtest: pd.DataFrame) -> list[list[object]]:
-    rows: list[list[object]] = []
+def _table_path(paths: Q2Paths, filename: str) -> str:
+    return f"`v2/q_2/tables/{filename}`"
+
+
+def _backtest_rows(backtest: pd.DataFrame) -> list[list[object]]:
     if backtest.empty:
-        return rows
+        return []
     summary = backtest[backtest["device_id"].astype(str) == "all"]
     if summary.empty:
         summary = backtest
+    rows: list[list[object]] = []
     for _, row in summary.iterrows():
         rows.append(
             [
-                row["device_id"],
                 row["model_name"],
-                _fmt(row["MAE"], 3),
-                _fmt(row["RMSE"], 3),
-                _fmt(row["post_maintenance_7d_MAE"], 3),
-                _fmt(row["rolling365_MAE"], 3),
-                int(row["n_validation_days"]),
-                int(row["n_post_maintenance_7d_days"]),
-                int(row["n_rolling365_days"]),
+                _fmt(row.get("MAE"), 3),
+                _fmt(row.get("RMSE"), 3),
+                _fmt(row.get("post_maintenance_7d_MAE"), 3),
+                _fmt(row.get("rolling365_MAE"), 3),
             ]
         )
     return rows
 
 
-def _path_sample_rows(future_paths: pd.DataFrame) -> list[list[object]]:
-    if future_paths.empty:
-        return []
-    main = future_paths[
-        (future_paths["model_name"] == "recovery_ratio_main")
-        & (future_paths["hmax_scenario"] == "neutral")
-    ].copy()
-    if main.empty:
-        main = future_paths.copy()
-
-    samples: list[pd.DataFrame] = []
-    start_date = main["date"].min()
-    start_rows = main[main["date"] == start_date].sort_values("device_id").head(3)
-    if len(start_rows):
-        samples.append(start_rows)
-
-    maintenance_rows = main[main["is_maintenance_day"].astype(bool)].sort_values(["date", "device_id"]).head(4)
-    if len(maintenance_rows):
-        samples.append(maintenance_rows)
-
-    risk_rows = main[main["rolling365_pred"].astype(float) < 37].sort_values(["date", "device_id"]).head(4)
-    if len(risk_rows):
-        samples.append(risk_rows)
-
-    if not samples:
-        samples = [main.sort_values(["date", "device_id"]).head(8)]
-    sample = pd.concat(samples, ignore_index=True).drop_duplicates(
-        subset=["model_name", "hmax_scenario", "device_id", "date"]
-    ).head(10)
+def _comparison_rows(comparison: pd.DataFrame) -> list[list[object]]:
     rows: list[list[object]] = []
-    for _, row in sample.iterrows():
+    for _, row in _sort_devices(comparison).iterrows():
         rows.append(
             [
-                row["model_name"],
-                row["hmax_scenario"],
                 row["device_id"],
-                _date(row["date"]),
-                _fmt(row["predicted_permeability"], 2),
-                _fmt(row["rolling365_pred"], 2),
-                bool(row["is_maintenance_day"]),
-                row["maintenance_type"] if pd.notna(row["maintenance_type"]) else "",
-                _fmt(row["hmax_t"], 2),
-                row["rho_used_source"] if pd.notna(row["rho_used_source"]) else "",
+                _date(row.get("preferred_life_date")),
+                _fmt(row.get("preferred_remaining_years"), 2),
+                row.get("preferred_model", "-"),
+                _fmt(row.get("fixed_gain_MAE"), 3),
+                _fmt(row.get("recovery_ratio_MAE"), 3),
+                row.get("selection_reason", "-"),
             ]
         )
     return rows
+
+
+def _scenario_rows(lifetime: pd.DataFrame) -> list[list[object]]:
+    if lifetime.empty:
+        return []
+    grouped = (
+        lifetime.groupby(["model_name", "hmax_scenario"], dropna=False)
+        .agg(n_devices=("device_id", "nunique"), n_lifetime_end=("status", lambda s: int((s == "lifetime_end").sum())))
+        .reset_index()
+    )
+    rows: list[list[object]] = []
+    for _, row in grouped.iterrows():
+        rows.append([row["model_name"], row["hmax_scenario"], int(row["n_devices"]), int(row["n_lifetime_end"])])
+    return rows
+
+
+def _table_status(paths: Q2Paths) -> str:
+    names = [
+        "表01_模型参数表.csv",
+        "表02_未来维护日程表.csv",
+        "表03_历史回测指标表.csv",
+        "表04_未来模拟路径表.csv",
+        "表05_寿命预测结果表.csv",
+        "表06_模型对比汇总表.csv",
+        "表07_长期外推参考表.csv",
+        "表08_寿命过长诊断表.csv",
+        "表09_Hmax工程保守敏感性表.csv",
+    ]
+    rows = [[name, "存在" if (paths.q2_tables_dir / name).exists() else "缺失"] for name in names]
+    return _md_table(["正式表", "状态"], rows)
 
 
 def write_q2_summary(
@@ -128,308 +124,82 @@ def write_q2_summary(
     diagnostics: pd.DataFrame,
     engineering_lifetime: pd.DataFrame,
 ) -> None:
-    overview = _read_csv(paths.q1_tables_dir / "表01_数据质量与设备基础概览.csv")
-    season = _read_csv(paths.q1_tables_dir / "表02_季节水平项与月度衰减强度.csv")
-    rule = _read_csv(paths.q1_tables_dir / "表03_当前固定维护触发规律.csv")
-    effect = _read_csv(paths.q1_tables_dir / "表05_维护事件效应汇总.csv")
-    hmax = _read_csv(paths.q1_tables_dir / "表06_Hmax与恢复比例质量评估.csv")
-
-    prediction_start = _date(lifetime["prediction_start_date"].dropna().iloc[0]) if len(lifetime) else "未生成"
     n_devices = int(params["device_id"].nunique()) if "device_id" in params else 0
-    n_valid_days = int(pd.to_numeric(overview.get("n_valid_days", pd.Series(dtype=float)), errors="coerce").sum())
-    n_low_days = int(pd.to_numeric(overview.get("n_days_below_37", pd.Series(dtype=float)), errors="coerce").sum())
-
-    season_level = season[season.get("section", pd.Series(dtype=str)) == "seasonal_level"].copy()
-    month_decay = season[season.get("section", pd.Series(dtype=str)) == "monthly_decay_intensity"].copy()
-    regression = season[season.get("section", pd.Series(dtype=str)) == "regression"].copy()
-    season_max = season_level.loc[pd.to_numeric(season_level["value"], errors="coerce").idxmax()] if len(season_level) else None
-    season_min = season_level.loc[pd.to_numeric(season_level["value"], errors="coerce").idxmin()] if len(season_level) else None
-    beta_tau = regression[regression.get("term", "") == "days_since_last_maintenance"]
-    beta_time = regression[regression.get("term", "") == "days_from_observation_start"]
-
-    n_medium = int(pd.to_numeric(rule.get("n_medium", pd.Series(dtype=float)), errors="coerce").sum())
-    n_major = int(pd.to_numeric(rule.get("n_major", pd.Series(dtype=float)), errors="coerce").sum())
-    global_major_ratio = n_major / (n_medium + n_major) if (n_medium + n_major) else float("nan")
-    no_major_devices = _list_devices(rule.loc[rule.get("n_major", 0) == 0, "device_id"]) if len(rule) else "无"
-    single_major_devices = _list_devices(rule.loc[rule.get("n_major", 0) == 1, "device_id"]) if len(rule) else "无"
-
-    medium_effect = effect[effect.get("maintenance_type", "") == "medium"]
-    major_effect = effect[effect.get("maintenance_type", "") == "major"]
-
-    main_schedule = schedule[schedule["model_name"].isin(["fixed_gain_baseline", "recovery_ratio_main"])] if len(schedule) else schedule
-    a4a8_main_major = len(
-        main_schedule[
-            main_schedule["device_id"].astype(str).isin(["a4", "a8"])
-            & (main_schedule["maintenance_type"].astype(str) == "major")
-        ]
-    ) if len(main_schedule) else 0
-    sensitivity_schedule = schedule[schedule["model_name"].astype(str).str.contains("major_sensitivity", na=False)] if len(schedule) else schedule
-    a4a8_first = sensitivity_schedule[
-        sensitivity_schedule["device_id"].astype(str).isin(["a4", "a8"])
-        & (sensitivity_schedule["maintenance_type"].astype(str) == "major")
-    ].groupby("device_id")["date"].min().reset_index() if len(sensitivity_schedule) else pd.DataFrame(columns=["device_id", "date"])
-
-    main_lifetime = lifetime[lifetime["model_name"] == "recovery_ratio_main"].copy() if len(lifetime) else pd.DataFrame()
-    ended_main = int((main_lifetime.get("status", pd.Series(dtype=str)) == "lifetime_end").sum()) if len(main_lifetime) else 0
-    not_reached_main = _list_devices(main_lifetime.loc[main_lifetime.get("status", "") != "lifetime_end", "device_id"]) if len(main_lifetime) else "无"
-
-    lifetime_rows: list[list[object]] = []
-    if len(main_lifetime):
-        for _, row in main_lifetime.sort_values("device_id", key=lambda s: s.map(_device_sort_key)).iterrows():
-            lifetime_rows.append(
-                [
-                    row["device_id"],
-                    row["hmax_scenario"],
-                    _fmt(row["current_real_rolling365"], 2),
-                    _date(row.get("functional_failure_date", "")),
-                    _date(row["lifetime_end_date"]),
-                    row.get("final_failure_type", ""),
-                    _fmt(row["remaining_life_years"], 2, "未触发"),
-                    _fmt(row["predicted_total_life_years"], 2, "未触发"),
-                    _date(row.get("maintenance_burden_warning_date", "")),
-                    row.get("maintenance_burden_reason", ""),
-                    row["status"],
-                ]
-            )
-
-    comparison_rows: list[list[object]] = []
-    if len(comparison):
-        for _, row in comparison.sort_values("device_id", key=lambda s: s.map(_device_sort_key)).iterrows():
-            comparison_rows.append(
-                [
-                    row["device_id"],
-                    _date(row["fixed_gain_life_date"]),
-                    _date(row["recovery_ratio_life_date"]),
-                    _fmt(row["fixed_gain_MAE"], 3),
-                    _fmt(row["recovery_ratio_MAE"], 3),
-                    row["rho_used_source_summary"],
-                    row["preferred_model"],
-                    row["selection_reason"],
-                ]
-            )
-
-    scenario_rows: list[list[object]] = []
-    if len(lifetime):
-        scenario_summary = lifetime.groupby(["model_name", "hmax_scenario"])["status"].apply(
-            lambda s: int((s == "lifetime_end").sum())
-        ).reset_index(name="n_lifetime_end")
-        for _, row in scenario_summary.iterrows():
-            scenario_rows.append([row["model_name"], row["hmax_scenario"], int(row["n_lifetime_end"])])
-
-    extended_rows: list[list[object]] = []
-    if len(extended_lifetime):
-        extended_main = extended_lifetime[extended_lifetime["model_name"] == "recovery_ratio_main"].copy()
-        for _, row in extended_main.sort_values("device_id", key=lambda s: s.map(_device_sort_key)).iterrows():
-            extended_rows.append(
-                [
-                    row["device_id"],
-                    row["hmax_scenario"],
-                    _date(row["extended_lifetime_end_date"]),
-                    _fmt(row["extended_remaining_life_years"], 2),
-                    row["extended_status"],
-                ]
-            )
-
-    diagnostics_rows: list[list[object]] = []
-    if len(diagnostics):
-        for _, row in diagnostics.sort_values("device_id", key=lambda s: s.map(_device_sort_key)).iterrows():
-            diagnostics_rows.append(
-                [
-                    row["device_id"],
-                    int(row["future_maintenance_count_30y"]),
-                    _fmt(row["annual_maintenance_count_30y"], 2),
-                    _fmt(row["avg_maintenance_interval_30y"], 1),
-                    _fmt(row["rolling365_min_30y"], 2),
-                    _fmt(row["rolling365_last_30y"], 2),
-                    bool(row["maintenance_burden_flag"]),
-                    _date(row.get("burden_trigger_date", "")),
-                    row.get("burden_trigger_reason", ""),
-                    _fmt(row.get("burden_trigger_annual_count", None), 2),
-                    _fmt(row.get("burden_trigger_avg_interval", None), 1),
-                    _fmt(row.get("burden_trigger_min_interval", None), 1),
-                    row["long_life_reason"],
-                ]
-            )
-
-    engineering_rows: list[list[object]] = []
-    if len(engineering_lifetime):
-        engineering_main = engineering_lifetime[
-            engineering_lifetime["model_name"] == "recovery_ratio_main_hmax_engineering_conservative"
-        ].copy()
-        for _, row in engineering_main.sort_values("device_id", key=lambda s: s.map(_device_sort_key)).iterrows():
-            engineering_rows.append(
-                [
-                    row["device_id"],
-                    row["hmax_scenario"],
-                    _date(row.get("final_lifetime_end_date", row.get("lifetime_end_date", ""))),
-                    row.get("final_failure_type", ""),
-                    _fmt(row.get("final_remaining_life_years", row.get("remaining_life_years", None)), 2),
-                    row["status"],
-                ]
-            )
-
-    hmax_rows: list[list[object]] = []
-    if len(params):
-        for _, row in params.sort_values("device_id", key=lambda s: s.map(_device_sort_key)).iterrows():
-            hmax_rows.append(
-                [
-                    row["device_id"],
-                    _fmt(row["hmax_trend_raw"], 6),
-                    _fmt(row["hmax_trend_limited"], 6),
-                    _fmt(row["hmax_trend_used"], 6),
-                    _fmt(row["hmax_annual_drop_ratio_used"], 3),
-                ]
-            )
-
-    archive_files = sorted((paths.q1_tables_dir / "archive").glob("*.csv"))
-    archive_rows = [[path.name] for path in archive_files]
-    path_sample_rows = _path_sample_rows(future_paths)
-    table04_rows = len(future_paths)
-    table04_devices = future_paths["device_id"].nunique() if "device_id" in future_paths else 0
-    table04_models = future_paths["model_name"].nunique() if "model_name" in future_paths else 0
+    prediction_start = _date(lifetime["prediction_start_date"].dropna().iloc[0]) if len(lifetime) else "-"
+    n_future_rows = len(future_paths)
+    n_schedule_rows = len(schedule)
 
     content = f"""# 第二问分析总结
 
-## 0. archive 是哪里来的
+## 1. 第二问解决什么问题
 
-`v2/q_1/tables/archive/` 是本次修正 Q2 之前主动生成的旧表归档目录。它不是新的数据源，也不是第二问模型输入。
+第二问解决的是在当前维护触发规律和现有维护效果口径下，对设备未来功能寿命进行预测。这里的寿命是功能寿命，主要依据预测透水率及 rolling365 判据是否触发失效。
 
-之前 `v2/q_1/tables/` 顶层同时存在新版表和旧版表，例如旧的 `表03_当前固定维护规律.csv`、旧的 `表06_Hmax与恢复比例汇总.csv`。这些旧表字段和现在的 Q2 口径不一致，如果继续放在顶层，后续代码或论文整理时很容易误读旧表。
+本问不做维护策略优化，不新增经济寿命硬终止，也不把维护负担作为主寿命硬终止条件。维护频率、维护负担、是否提前更换等策略问题放到第三问处理。
 
-所以 Q1 pipeline 重跑时会把旧版表从 `v2/q_1/tables/` 顶层移动到 `v2/q_1/tables/archive/`，只作为历史对照保留，不删除。Q2 只读取顶层新版 8 张表，绝不读取 archive 里的文件。
+## 2. 使用了哪些第一问结果
 
-当前 archive 中的旧表为：
+Q2 从第一问读取当前维护触发规律、设备核心指标、季节项、长期衰减项、Hmax 与恢复比例质量评估等结果，并据此生成参数、未来维护日程、未来模拟路径和寿命预测表。
 
-{_md_table(["归档旧表"], archive_rows)}
+当前预测起点为 {prediction_start}，涉及设备 {n_devices} 台。未来维护日程共 {n_schedule_rows} 行，未来模拟路径共 {n_future_rows} 行。
 
-## 1. 当前完成状态
+{_table_status(paths)}
 
-Q2 已经从第一问新版表中读取参数，并完成两类主模型：`fixed_gain_baseline` 和 `recovery_ratio_main`。主预测统一采用 Hmax 的 `neutral` 情景；`optimistic`、`pessimistic` 和全局大维护兜底方案只作为敏感性分析。
+## 3. 两个模型是什么
 
-如果某个 CSV 正在被 Excel 或编辑器占用，pipeline 不会强行覆盖，而是写出同名 `_new_时间戳.csv` 副本。当前分析逻辑以本次运行生成的最新结果为准；关闭占用文件后重跑 Q2，即可把最新结果写回标准文件名。
+`fixed_gain_baseline` 是基准模型：维护日按固定平台增益修复设备状态，用于提供稳定、可解释的对照结果。
 
-已读取的核心输入包括：
+`recovery_ratio_main` 是主模型：维护日按恢复比例机制修复设备状态，优先使用设备级或全局恢复比例；当恢复比例来源不足时，内部可以使用 fixed gain fallback。
 
-- `表03_当前固定维护触发规律.csv`
-- `表07_设备核心指标汇总.csv`
-- `表02_季节水平项与月度衰减强度.csv`
-- `表06_Hmax与恢复比例质量评估.csv`
-- `表08_季节对维护效应影响.csv`
-- `日尺度特征表.csv`
+两者的核心差异只在维护日恢复机制。第二问本轮不修改衰减机制、Hmax 主情景、维护日程生成规则或寿命终止机制。
 
-数据规模：设备 {n_devices} 台，有效日记录 {n_valid_days} 条，历史低于 37 的日记录 {n_low_days} 条。
+## 4. 回测结果
 
-## 2. 第一问参数读数
+历史回测结果来自 {_table_path(paths, "表03_历史回测指标表.csv")}。回测指标包括 MAE、RMSE、`post_maintenance_7d_MAE` 和 `rolling365_MAE`，分别衡量整体误差、维护后短期误差和 rolling365 判据相关误差。
 
-季节水平项最高月份为 {int(season_max["month"]) if season_max is not None else "-"} 月，值约 {_fmt(season_max["value"] if season_max is not None else None, 2)}；最低月份为 {int(season_min["month"]) if season_min is not None else "-"} 月，值约 {_fmt(season_min["value"] if season_min is not None else None, 2)}。
+模型选择主要依据 neutral 主情景下的设备级回测 MAE，并结合恢复比例来源是否可靠判断。
 
-解释型回归中，`days_since_last_maintenance` 系数为 {_fmt(beta_tau["coef"].iloc[0] if len(beta_tau) else None, 6)}，`days_from_observation_start` 系数为 {_fmt(beta_time["coef"].iloc[0] if len(beta_time) else None, 6)}。前者是维护周期内净衰减，后者是长期日历时间趋势。
+{_md_table(["模型", "MAE", "RMSE", "post_maintenance_7d_MAE", "rolling365_MAE"], _backtest_rows(backtest))}
 
-维护记录中，中维护 {n_medium} 次，大维护 {n_major} 次，全局大维护比例约 {_fmt(global_major_ratio, 3)}。历史无大维护设备为 {no_major_devices}；只有一次大维护、主方案不直接外推设备级大维护周期的设备为 {single_major_devices}。
+## 5. 寿命预测主结果
 
-维护效应方面，中维护平台提升中位数为 {_fmt(medium_effect["plateau_gain_median"].iloc[0] if len(medium_effect) else None, 3)}，平台回升率中位数为 {_fmt(medium_effect["plateau_gain_ratio_median"].iloc[0] if len(medium_effect) else None, 3)}；大维护平台提升中位数为 {_fmt(major_effect["plateau_gain_median"].iloc[0] if len(major_effect) else None, 3)}，平台回升率中位数为 {_fmt(major_effect["plateau_gain_ratio_median"].iloc[0] if len(major_effect) else None, 3)}。
+第二问正文主结果使用 {_table_path(paths, "表06_模型对比汇总表.csv")}。该表是“第二问主寿命预测结果与模型选择汇总表”，在 neutral 主情景下结合历史回测误差选择推荐模型。
 
-## 3. Hmax 情景与限幅
+`preferred_model` 规则如下：
 
-Hmax 趋势不再直接把两年样本的原始负斜率外推 30 年，而是先限制年度下降比例，再生成三情景：
+- 若 `recovery_ratio_main` 的 MAE 不比 `fixed_gain_baseline` 差超过 5%，且恢复比例来源可靠，则推荐 `recovery_ratio_main`。
+- 若 `recovery_ratio_main` 内部使用 fixed gain fallback，但 MAE 不比 baseline 差超过 5%，则推荐 `recovery_ratio_with_fixed_gain_fallback`。
+- 若 `recovery_ratio_main` 的 MAE 比 `fixed_gain_baseline` 差超过 5%，则推荐 `fixed_gain_baseline`。
 
-- `optimistic`: Hmax 不下降。
-- `neutral`: 使用限幅后斜率的一半，作为第二问主结果。
-- `pessimistic`: 使用限幅后斜率，作为敏感性分析。
+表06中的 `preferred_life_date` 和 `preferred_remaining_years` 是正文引用的主寿命日期和剩余寿命年限。`selection_reason` 与 `note` 必须和 `preferred_model` 保持一致。
 
-限幅规则为 `hmax_annual_drop_ratio <= 0.20`。主参数表中的 neutral 情景如下：
+{_md_table(["设备", "推荐寿命日期", "推荐剩余年限", "推荐模型", "固定增益MAE", "恢复比例MAE", "选择原因"], _comparison_rows(comparison))}
 
-{_md_table(["设备", "原始斜率", "限幅斜率", "主用斜率", "主用年下降比例"], hmax_rows)}
+## 6. 完整情景与敏感性分析
 
-## 4. 回测口径
+{_table_path(paths, "表05_寿命预测结果表.csv")} 给出了不同模型与 Hmax 情景下的完整寿命预测结果，包括 `fixed_gain_baseline`、`recovery_ratio_main` 以及 optimistic、neutral、pessimistic 等 Hmax 情景。表05是完整情景结果，不把所有行混作第二问正文主寿命结果。
 
-回测阶段使用验证期真实中/大维护日程，目的是检验两种状态转移机制，而不是检验维护触发规则。未来预测阶段才使用当前维护触发规则生成维护日程。
+{_table_path(paths, "表07_长期外推参考表.csv")} 只作为超过 30 年预测窗口后的长期外推参考，不参与 `preferred_model` 判断，不作为第二问主结论。
 
-验证期为每台设备最后 180 个有效日。`post_maintenance_7d_MAE` 对维护后 +1 到 +7 天日期去重后统计；`rolling365_MAE` 使用“验证期前 364 天真实 daily_median + 验证期预测值”的拼接序列计算预测 rolling365，再和真实 rolling365 对齐比较。
+{_table_path(paths, "表08_寿命过长诊断表.csv")} 用于解释某些设备为什么在功能寿命判据下预测较长，辅助判断 Hmax、衰减率、维护频率或 rolling365 判据的影响，不直接改变主寿命结果。
 
-{_md_table(["设备", "模型", "MAE", "RMSE", "维护后7日MAE", "rolling365_MAE", "验证日数", "维护后7日数", "rolling365日数"], _metric_rows(backtest))}
+{_table_path(paths, "表09_Hmax工程保守敏感性表.csv")} 只作为 Hmax 更保守下降假设下的敏感性分析，不替代 neutral 主情景，不参与 `preferred_model` 判断。
 
-## 5. 大维护触发修正
+表05情景覆盖情况如下：
 
-未来预测中，大维护优先级仍高于中维护。新的触发规则修正了三个边界：
+{_md_table(["模型", "Hmax情景", "设备数", "触发寿命终止数"], _scenario_rows(lifetime))}
 
-- `medium_count_between_major_median <= 0` 时关闭“中维护次数触发大维护”，不再强行转成 1。
-- `n_major == 1` 的设备主方案不直接使用设备级大维护间隔外推，敏感性方案才使用全局 fallback。
-- `n_major == 0` 的设备主方案不安排大维护。
+## 7. 结果解释
 
-主方案中 A4/A8 的大维护事件数为 {a4a8_main_major}。全局大维护兜底敏感性方案中，A4/A8 第一次大维护如下：
+如果某设备在表05中出现 `>30 年` 或 `not_reached_within_30y`，并不表示其精确寿命就是几十年，而是表示在当前功能寿命判据和 30 年预测窗口内没有触发失效。
 
-{_md_table(["设备", "敏感性方案第一次大维护"], a4a8_first.values.tolist())}
+正文引用时以表06推荐模型结果为主口径。表05、表07、表08、表09分别用于补充展示完整情景、长期外推、原因诊断和 Hmax 敏感性。
 
-## 6. 表04：未来模拟路径表
+## 8. 与第三问的衔接
 
-`表04_未来模拟路径表.csv` 现在恢复为完整单表输出，路径为 `v2/q_2/tables/表04_未来模拟路径表.csv`。由于该表体积较大，已经写入 `.gitignore`，用于本地复现和检查，不建议提交进 Git。
+维护负担、维护频率、提前更换时点和维护策略优化不在第二问中作为硬判寿命条件。第二问只给出当前维护规律下的功能寿命预测；第三问再把维护负担和策略成本收益纳入优化目标。
 
-表04保存的是第二问逐日模拟明细，共 {table04_rows} 行，覆盖 {table04_devices} 台设备和 {table04_models} 个模型/情景组合。主要字段含义如下：
-
-- `model_name`：模型名称，包括固定增益、恢复比例、Hmax 乐观/悲观敏感性、大维护兜底敏感性。
-- `hmax_scenario`：Hmax 情景，主结果为 `neutral`。
-- `device_id`、`date`：设备和模拟日期。
-- `x_state`：扣除季节水平项后的设备状态。
-- `seasonal_level`：当月季节水平项。
-- `predicted_permeability`：预测透水率，即 `x_state + seasonal_level`。
-- `rolling365_pred`：预测路径上的滚动 365 天平均透水率。
-- `is_maintenance_day`、`maintenance_type`：当天是否触发维护以及维护类型。
-- `rho_used_source`：恢复比例模型当天维护使用的 rho 来源，或固定增益 fallback 标记。
-- `hmax_t`、`hmax_trend_used`、`hmax_annual_drop_ratio_used`：该日 Hmax 水平和情景斜率信息。
-- `is_terminal_day`、`failure_type`：工程寿命终止日及终止类型。
-- `hmax_damage_cumulative`：中/大维护累计造成的 Hmax 工程损伤，只作用于恢复上限，不直接扣减当前状态。
-
-下面只抽取少量代表性行展示表04内容，完整逐日路径请直接查看 CSV：
-
-{_md_table(["模型", "Hmax情景", "设备", "日期", "预测透水率", "rolling365", "维护日", "维护类型", "Hmax", "rho来源"], path_sample_rows)}
-
-## 7. 寿命预测主结果
-
-寿命判定现在采用工程寿命终止机制：既保留 rolling365 功能性失效，也加入恢复能力失效和工程服役上限。`functional_failure_date` 表示模型自然功能失效日期，`final_lifetime_end_date` 表示加入工程约束后的最终寿命日期；如果终止类型为 `service_cap_reached`，表示达到工程服役上限，不解释为模型自然失效。
-
-维护损伤项只降低 Hmax，不直接扣减当前状态。维护负担仍会在维护触发时检查，但它不再作为第二问主寿命的硬终止条件，而是作为 `maintenance_burden_warning_date` 和 `maintenance_burden_reason` 输出，用于提示当前维护策略可能不经济，并衔接第三问优化。
-
-主寿命定义为 `T_main = min(T_func, T_rec, T_cap)`，其中 `T_rec` 包含 `hmax_depleted` 和 `unrecoverable_below_37`。同一天多类终止同时出现时，优先级为 `hmax_depleted > unrecoverable_below_37 > functional_failure > service_cap_reached`。因此，表05同时保留自然功能失效日期、恢复能力失效日期、工程上限日期和最终寿命日期，二者不能混同。
-
-预测起点为 {prediction_start}。主模型 `recovery_ratio_main` 的 neutral 情景中，{ended_main} 台设备在 30 年预测期内触发寿命终止；未触发设备为 {not_reached_main}。
-
-{_md_table(["设备", "Hmax情景", "当前真实rolling365", "功能失效日", "最终寿命日", "最终失效类型", "剩余寿命年", "总寿命年", "维护负担预警日", "维护负担原因", "状态"], lifetime_rows)}
-
-## 8. 情景敏感性
-
-以下表格统计每个模型和 Hmax 情景下触发生命终止的设备数。主结论只使用 `neutral` 情景；`optimistic` 和 `pessimistic` 用于说明 Hmax 外推假设对结果的影响。
-
-{_md_table(["模型", "Hmax情景", "触发终止设备数"], scenario_rows)}
-
-`表07_长期外推参考表.csv` 额外给出 100 年 extended horizon 的远期外推参考。该表只用于附录或敏感性讨论，不参与 `preferred_model` 判断，也不改变表05的 30 年主预测结论。
-
-{_md_table(["设备", "Hmax情景", "100年参考寿命日", "100年参考剩余寿命", "extended_status"], extended_rows)}
-
-## 9. 寿命过长诊断与维护负担
-
-新增 `表08_寿命过长诊断表.csv`，用于解释 30 年主预测中未触发寿命终止的设备为什么寿命较长，同时记录维护负担预警、Hmax 变化和 rolling365 走势，并给第三问维护策略优化提供衔接线索。该表采用 `recovery_ratio_main + neutral` 口径，不改变表05主结果。
-
-维护负担预警规则为：滚动一年维护次数大于 8，或滚动一年平均维护间隔小于 45 天，或滚动一年最小维护间隔小于 30 天。该预警不代表设备功能寿命终止，而表示当前维护策略可能过于频繁，需要在第三问中优化。
-
-{_md_table(["设备", "30年维护次数", "年均维护次数", "平均间隔", "rolling365最小值", "30年末rolling365", "维护负担预警", "预警日期", "预警原因", "触发年维护次数", "触发平均间隔", "触发最小间隔", "诊断原因"], diagnostics_rows)}
-
-## 10. Hmax 工程保守敏感性
-
-新增 `表09_Hmax工程保守敏感性表.csv`，使用 `engineering_conservative` 情景，即 Hmax 年最大恢复上限下降率按 30% 限幅。该情景只用于敏感性分析，不替代 `neutral` 主结果，也不参与 `preferred_model` 判断。表中寿命日期同样采用工程最终寿命 `final_lifetime_end_date`。
-
-{_md_table(["设备", "Hmax情景", "工程保守寿命日", "最终失效类型", "工程保守剩余寿命", "status"], engineering_rows)}
-
-## 11. 模型比较与推荐
-
-`preferred_model` 不再只看 rho 可靠性标记，而是同时看实际使用的 rho 来源和设备级回测 MAE。若恢复比例模型 MAE 超过固定增益模型 5%，推荐固定增益；若恢复比例模型内部使用固定增益 fallback，则推荐名写为 `recovery_ratio_with_fixed_gain_fallback`。
-
-{_md_table(["设备", "固定增益寿命日", "恢复比例寿命日", "固定增益MAE", "恢复比例MAE", "rho来源", "推荐模型", "选择原因"], comparison_rows)}
-
-## 12. 当前结论
-
-这一版 Q2 已经修正了五个关键问题：回测是真比较，Hmax 是限幅后三情景，大维护触发不再把 K=0 误转成 1，模型推荐逻辑和 fallback 行为一致，并且寿命终止从单一 rolling365 判据升级为功能失效、恢复能力失效和工程服役上限共同约束。维护负担不再截断第二问主寿命，而是作为风险预警保留。
-
-当前第二问的结论是“按现有维护触发规则继续运行时的功能/工程寿命预测”，不是维护策略优化。A4/A8 是否应加入大维护、维护频率是否要改变、如何降低 maintenance burden，应放到第三问优化模型中处理。
+第二问最终采用表06作为主结果表。表05保留全部模型与 Hmax 情景下的寿命预测结果，表07提供长期外推参考，表08用于解释寿命较长设备的原因，表09用于展示 Hmax 更保守假设下的敏感性。由于第二问目标是当前维护规律下的功能寿命预测，维护负担不作为主寿命硬终止，而作为第三问维护策略优化的重要依据。
 """
-    paths.q2_markdown_dir.joinpath("第二问分析总结.md").write_text(content, encoding="utf-8")
+    out_path: Path = paths.q2_markdown_dir / "第二问分析总结.md"
+    out_path.write_text(content, encoding="utf-8")
