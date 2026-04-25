@@ -105,15 +105,20 @@ def simulate_future_paths(
     params: pd.DataFrame,
     daily: pd.DataFrame,
     helpers: dict[str, object],
+    horizon_years: int = 30,
+    include_lifetime_test_extra: bool = True,
+    model_specs: list[tuple[str, str, str, bool]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     prediction_start: pd.Timestamp = helpers["prediction_start"]
-    dates = pd.date_range(prediction_start, periods=HORIZON_DAYS + LIFETIME_TEST_EXTRA_DAYS, freq="D")
+    extra_days = LIFETIME_TEST_EXTRA_DAYS if include_lifetime_test_extra else 0
+    dates = pd.date_range(prediction_start, periods=horizon_years * 365 + extra_days, freq="D")
+    specs = model_specs if model_specs is not None else _model_specs()
     path_rows: list[dict[str, object]] = []
     schedule_rows: list[dict[str, object]] = []
 
     for _, param in params.iterrows():
         device_id = str(param["device_id"])
-        for model_name, model_family, hmax_scenario, use_global_major_fallback in _model_specs():
+        for model_name, model_family, hmax_scenario, use_global_major_fallback in specs:
             hmax_trend, hmax_annual_ratio = hmax_trend_for_scenario(param, hmax_scenario)
             x_state = float(param["initial_x_state"])
             x_history = _x_history(daily, device_id, helpers["seasonal_level"], x_state)

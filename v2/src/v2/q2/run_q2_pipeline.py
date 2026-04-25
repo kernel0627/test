@@ -9,10 +9,10 @@ import pandas as pd
 
 from .backtest_models import build_backtest_metrics
 from .build_parameters import build_model_parameters
-from .lifetime_prediction import build_lifetime_predictions
+from .lifetime_prediction import build_extended_lifetime_predictions, build_lifetime_predictions
 from .load_q1_outputs import load_q1_outputs
 from .paths import ensure_output_dirs, get_paths
-from .simulate_models import simulate_future_paths
+from .simulate_models import MODEL_FIXED, MODEL_MAIN, simulate_future_paths
 from .write_summary import write_q2_summary
 
 
@@ -22,13 +22,20 @@ DATE_COLUMNS = {
     "prediction_start_date",
     "first_date_rolling365_below_37",
     "lifetime_end_date",
+    "extended_first_date_rolling365_below_37",
+    "extended_lifetime_end_date",
 }
 
 
 def _format_for_csv(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for column in DATE_COLUMNS.intersection(out.columns):
-        out[column] = pd.to_datetime(out[column], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        original = out[column].copy()
+        text = original.astype("string")
+        keep_text = text.str.startswith(">", na=False)
+        converted = pd.to_datetime(original.where(~keep_text), errors="coerce")
+        formatted = converted.dt.strftime("%Y-%m-%d")
+        out[column] = original.where(converted.isna(), formatted).fillna("")
     return out
 
 
@@ -82,6 +89,13 @@ def _device_backtest_mae(backtest: pd.DataFrame, device_id: str, model_name: str
     return float(row["MAE"].iloc[0])
 
 
+def _numeric_or_nan(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
 def _build_comparison(
     lifetime: pd.DataFrame,
     params: pd.DataFrame,
@@ -97,8 +111,10 @@ def _build_comparison(
         main_date = main["lifetime_end_date"].iloc[0] if len(main) else pd.NaT
         fixed_years = fixed["remaining_life_years"].iloc[0] if len(fixed) else np.nan
         main_years = main["remaining_life_years"].iloc[0] if len(main) else np.nan
-        if pd.notna(fixed_years) and pd.notna(main_years):
-            diff = float(main_years) - float(fixed_years)
+        fixed_years_num = _numeric_or_nan(fixed_years)
+        main_years_num = _numeric_or_nan(main_years)
+        if np.isfinite(fixed_years_num) and np.isfinite(main_years_num):
+            diff = main_years_num - fixed_years_num
         else:
             diff = np.nan
         fixed_mae = _device_backtest_mae(backtest, device_id, "fixed_gain_baseline")
@@ -143,6 +159,7 @@ def _assert_outputs(paths, outputs: dict[str, pd.DataFrame]) -> None:
         paths.q2_tables_dir / "表04_未来模拟路径表.csv",
         paths.q2_tables_dir / "表05_寿命预测结果表.csv",
         paths.q2_tables_dir / "表06_模型对比汇总表.csv",
+        paths.q2_tables_dir / "表07_长期外推参考表.csv",
         paths.q2_markdown_dir / "第二问分析总结.md",
     ]
     missing = [str(path) for path in expected if not path.exists()]
@@ -169,8 +186,27 @@ def main() -> None:
     q1 = load_q1_outputs(paths)
     params, helpers = build_model_parameters(q1)
     future_paths, schedule = simulate_future_paths(params, q1["daily"], helpers)
+    extended_specs = [
+        (MODEL_FIXED, "fixed", "neutral", False),
+        (MODEL_MAIN, "main", "neutral", False),
+    ]
+    extended_paths, _ = simulate_future_paths(
+        params,
+        q1["daily"],
+        helpers,
+        horizon_years=100,
+        include_lifetime_test_extra=True,
+        model_specs=extended_specs,
+    )
     backtest = build_backtest_metrics(q1["daily"], params, helpers)
     lifetime = build_lifetime_predictions(future_paths, params, q1["daily"], helpers["prediction_start"])
+    extended_lifetime = build_extended_lifetime_predictions(
+        extended_paths,
+        params,
+        q1["daily"],
+        helpers["prediction_start"],
+        extended_horizon_years=100,
+    )
     comparison = _build_comparison(lifetime, params, backtest, schedule)
 
     _write_csv(params[[
@@ -211,7 +247,8 @@ def main() -> None:
     _write_table04_full(future_paths, paths.q2_tables_dir)
     _write_csv(lifetime, paths.q2_tables_dir / "表05_寿命预测结果表.csv")
     _write_csv(comparison, paths.q2_tables_dir / "表06_模型对比汇总表.csv")
-    write_q2_summary(paths, params, schedule, backtest, lifetime, comparison, future_paths)
+    _write_csv(extended_lifetime, paths.q2_tables_dir / "表07_长期外推参考表.csv")
+    write_q2_summary(paths, params, schedule, backtest, lifetime, comparison, future_paths, extended_lifetime)
     _assert_outputs(paths, {"schedule": schedule, "lifetime": lifetime})
     print("v2 q2 pipeline completed.")
 
