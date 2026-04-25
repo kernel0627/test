@@ -12,6 +12,7 @@ from .build_parameters import build_model_parameters
 from .lifetime_prediction import build_extended_lifetime_predictions, build_lifetime_predictions
 from .load_q1_outputs import load_q1_outputs
 from .paths import ensure_output_dirs, get_paths
+from .simple_ablation import build_simple_ablation, write_ablation_markdown
 from .simulate_models import (
     MODEL_FIXED,
     MODEL_FIXED_HMAX_ENG,
@@ -375,6 +376,7 @@ def main() -> None:
         extended_horizon_years=100,
     )
     comparison = _build_comparison(lifetime, params, backtest, schedule)
+    ablation = build_simple_ablation(backtest, comparison)
     diagnostics = _build_long_life_diagnostics(future_paths, schedule, params, lifetime)
     engineering_specs = [
         (MODEL_FIXED_HMAX_ENG, "fixed", "engineering_conservative", False),
@@ -443,6 +445,7 @@ def main() -> None:
     _write_csv(extended_lifetime, paths.q2_tables_dir / "表07_长期外推参考表.csv")
     _write_csv(diagnostics, paths.q2_tables_dir / "表08_寿命过长诊断表.csv")
     _write_csv(engineering_lifetime, paths.q2_tables_dir / "表09_Hmax工程保守敏感性表.csv")
+    _write_csv(ablation, paths.q2_tables_dir / "表10_简化消融实验表.csv")
     write_q2_summary(
         paths,
         params,
@@ -455,6 +458,7 @@ def main() -> None:
         diagnostics,
         engineering_lifetime,
     )
+    write_ablation_markdown(paths.q2_markdown_dir / "第二问检验与消融说明.md")
     _assert_outputs(paths, {"schedule": schedule, "lifetime": lifetime})
     print("v2 q2 pipeline completed.")
 

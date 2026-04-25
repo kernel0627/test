@@ -1,0 +1,5 @@
+﻿policy_name,annual_cost,total_cost,n_medium,n_major,n_replace,days_below_37,min_rolling365,rank_by_annual_cost
+current_policy,1007.28,100728.0,508,92,327,6601,25.246533419893243,1
+delayed_policy,1014.54,101454.0,482,34,332,6309,25.622592679443926,2
+optimized_policy,1014.54,101454.0,482,34,332,6309,25.622592679443926,2
+conservative_policy,1639.65,163965.0,919,59,535,2607,32.568844558220235,3

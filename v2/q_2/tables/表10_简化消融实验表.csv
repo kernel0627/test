@@ -1,0 +1,4 @@
+﻿model_level,model_name,MAE,RMSE,post_maintenance_7d_MAE,rolling365_MAE,improvement_over_M0,interpretation
+M0,M0_trend_season_baseline,,,,,optional_not_run,未运行；保留为只含趋势/季节的可选基准，不影响当前最小消融结论。
+M1,M1_fixed_gain_baseline,8.760741751196399,11.09127337035422,10.220874219425005,1.2096505881358457,not_applicable,固定增益模型作为显式维护恢复机制的基准。
+M2,M2_final_preferred_model,7.9568121276138,10.236896584057655,9.236606843542926,1.2136230466496705,not_applicable,按表06推荐模型逐设备汇总，用于代表第二问最终推荐口径。

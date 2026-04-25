@@ -10,6 +10,7 @@ from .build_daily_features import build_daily_features, clean_hourly
 from .cycle_decay import build_cycles
 from .export_chinese_headers import write_chinese_header_tables
 from .hmax_recovery import build_hmax_recovery
+from .key_tests import build_key_test_tables, write_key_test_markdown
 from .load_inputs import load_maintenance, load_observations, sorted_device_ids
 from .maintenance_effect import build_event_effects
 from .maintenance_rule import build_current_maintenance_rule
@@ -40,6 +41,9 @@ LEGACY_TABLE_FILES = [
     "表04_维护周期衰减汇总.csv",
     "表06_Hmax与恢复比例汇总.csv",
 ]
+
+TABLE_09_FILE = "表09_关键检验结果汇总.csv"
+TABLE_09A_FILE = "表09a_Spearman相关性分析.csv"
 
 DATE_COLUMNS = {
     "date",
@@ -121,6 +125,7 @@ def _build_decay_summary(cycle_summary: pd.DataFrame, pure_summary: pd.DataFrame
 
 
 def _assert_outputs(paths, maintenance: pd.DataFrame) -> None:
+    heatmap = paths.q1_dir / "figures" / "static" / "q1_fig_spearman_correlation_heatmap.png"
     expected = [
         paths.cleaned_dir / DAILY_FEATURES_FILE,
         paths.cleaned_dir / CYCLE_DETAIL_FILE,
@@ -134,6 +139,10 @@ def _assert_outputs(paths, maintenance: pd.DataFrame) -> None:
         paths.tables_dir / TABLE_06_FILE,
         paths.tables_dir / TABLE_07_FILE,
         paths.tables_dir / TABLE_08_FILE,
+        paths.tables_dir / TABLE_09_FILE,
+        paths.tables_dir / TABLE_09A_FILE,
+        heatmap,
+        paths.markdown_dir / "第一问检验补充说明.md",
         paths.markdown_dir / "第一问分析总结.md",
     ]
     missing = [str(path) for path in expected if not path.exists()]
@@ -169,10 +178,9 @@ def _assert_outputs(paths, maintenance: pd.DataFrame) -> None:
         raise AssertionError("Q1 event detail does not contain all maintenance events.")
     for pattern in ["*.png", "*.html"]:
         found = list(paths.q1_dir.rglob(pattern))
+        found = [path for path in found if path != heatmap]
         if found:
             raise AssertionError(f"Unexpected visual outputs found: {found[:3]}")
-    if (paths.q1_dir / "figures").exists():
-        raise AssertionError("Unexpected figures directory under v2/q_1.")
 
 
 def main() -> None:
@@ -196,6 +204,13 @@ def main() -> None:
     recovery_summary, events_with_rho = build_hmax_recovery(daily, events, overview, device_ids)
     seasonal_effect = build_seasonal_maintenance_effect(events_with_rho)
     core = build_core_metrics(device_ids, overview, rule, decay_summary, effect_summary, recovery_summary)
+    spearman, key_tests = build_key_test_tables(
+        daily,
+        season_decay,
+        events,
+        cycles,
+        paths.q1_dir / "figures" / "static" / "q1_fig_spearman_correlation_heatmap.png",
+    )
 
     table_outputs = {
         TABLE_01_FILE: overview,
@@ -206,6 +221,8 @@ def main() -> None:
         TABLE_06_FILE: recovery_summary,
         TABLE_07_FILE: core,
         TABLE_08_FILE: seasonal_effect,
+        TABLE_09_FILE: key_tests,
+        TABLE_09A_FILE: spearman,
     }
 
     _write_csv(daily, paths.cleaned_dir / DAILY_FEATURES_FILE)
@@ -217,6 +234,7 @@ def main() -> None:
     write_chinese_header_tables(paths, {_name: _format_for_csv(_df) for _name, _df in table_outputs.items()})
 
     write_markdown_summary(paths, overview, season_decay, rule, decay_summary, effect_summary, recovery_summary, seasonal_effect, core)
+    write_key_test_markdown(paths.markdown_dir / "第一问检验补充说明.md")
     _assert_outputs(paths, maintenance)
     print("v2 q1 pipeline completed.")
 

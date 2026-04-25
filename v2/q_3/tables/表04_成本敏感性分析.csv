@@ -1,0 +1,7 @@
+﻿scenario,purchase_cost,medium_cost,major_cost,best_policy_name,best_annual_cost,policy_changed,interpretation
+purchase_cost_0.8,240.0,3.0,12.0,current_policy,811.08,False,成本扰动下最优策略保持稳定。
+purchase_cost_1.2,360.0,3.0,12.0,current_policy,1203.48,False,成本扰动下最优策略保持稳定。
+medium_cost_0.8,300.0,2.4000000000000004,12.0,current_policy,1004.232,False,成本扰动下最优策略保持稳定。
+medium_cost_1.2,300.0,3.5999999999999996,12.0,current_policy,1010.3279999999999,False,成本扰动下最优策略保持稳定。
+major_cost_0.8,300.0,3.0,9.600000000000001,current_policy,1005.0720000000001,False,成本扰动下最优策略保持稳定。
+major_cost_1.2,300.0,3.0,14.399999999999999,current_policy,1009.4879999999999,False,成本扰动下最优策略保持稳定。

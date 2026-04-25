@@ -1,0 +1,5 @@
+﻿policy_name,policy_type,theta_M,theta_B,I_M_min,I_B_min,description
+current_policy,fixed_current_rule,,,61.0,244.0,按第二问提取的当前维护间隔近似复现当前策略。
+conservative_policy,threshold_rule,60.0,45.0,30.0,120.0,提前维护，降低功能风险但维护成本较高。
+delayed_policy,threshold_rule,45.0,37.0,60.0,240.0,延迟维护，减少维护次数但失效风险较高。
+optimized_policy,grid_candidate,45.0,37.0,60.0,240.0,网格搜索候选策略。

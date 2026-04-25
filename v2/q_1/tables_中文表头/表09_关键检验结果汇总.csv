@@ -1,0 +1,12 @@
+﻿内容类别,test_name,method,target,statistic,p值,conclusion,used_in_paper
+Spearman相关性,daily_median vs days_since_last_maintenance,Spearman rank correlation,daily_median; days_since_last_maintenance,-0.16692762486026444,9.452326008705208e-43,daily_median 与 days_since_last_maintenance 呈较弱负相关，显著；该结果只说明变量关系方向，不代表因果。,用于说明变量关系方向，不作为因果结论。
+Spearman相关性,season_adjusted_permeability vs days_since_last_maintenance,Spearman rank correlation,season_adjusted_permeability; days_since_last_maintenance,-0.34139458930819183,5.086435285337436e-190,days_since_last_maintenance 与 season_adjusted_permeability 呈中等负相关，显著；该结果只说明变量关系方向，不代表因果。,用于说明变量关系方向，不作为因果结论。
+Spearman相关性,daily_median vs days_from_observation_start,Spearman rank correlation,daily_median; days_from_observation_start,-0.3788446636867329,1.1295002126505988e-254,daily_median 与 days_from_observation_start 呈中等负相关，显著；该结果只说明变量关系方向，不代表因果。,用于说明变量关系方向，不作为因果结论。
+Spearman相关性,device_centered_permeability vs month,Spearman rank correlation,device_centered_permeability; month,0.1972022068471906,5.655149274211071e-63,device_centered_permeability 与 month 呈较弱正相关，显著；该结果只说明变量关系方向，不代表因果。,用于说明变量关系方向，不作为因果结论。
+Spearman相关性,daily_median vs is_post_medium_window,Spearman rank correlation,daily_median; is_post_medium_window,0.1293382977969601,1.7619826223924026e-27,daily_median 与 is_post_medium_window 呈较弱正相关，显著；该结果只说明变量关系方向，不代表因果。,用于说明变量关系方向，不作为因果结论。
+Spearman相关性,daily_median vs is_post_major_window,Spearman rank correlation,daily_median; is_post_major_window,-0.02180267414153612,0.06937737335017981,daily_median 与 is_post_major_window 呈较弱负相关，不显著；该结果只说明变量关系方向，不代表因果。,用于说明变量关系方向，不作为因果结论。
+维护前后显著性,medium_pre_post_wilcoxon,"Wilcoxon signed-rank test, alternative: gain > 0",medium plateau_gain,5671.0,1.9960851797597312e-19,medium维护后透水率平台水平相较维护前显著提升。,用于验证维护确实具有恢复作用。
+维护前后显著性,major_pre_post_wilcoxon,"Wilcoxon signed-rank test, alternative: gain > 0",major plateau_gain,136.0,1.52587890625e-05,major维护后透水率平台水平相较维护前显著提升。,用于验证维护确实具有恢复作用。
+中大维护差异,medium_vs_major_plateau_gain_ratio,Mann-Whitney U test,plateau_gain_ratio,857.0,0.9485976015407166,中维护与大维护在 plateau_gain_ratio 上未表现出显著差异，不能简单假设大维护一定优于中维护。,用于说明中/大维护不能只按短期提升大小排序。
+中大维护差异,medium_vs_major_hold_ratio_7d,Mann-Whitney U test,hold_ratio_7d,976.0,0.11752366824031901,中维护与大维护在 hold_ratio_7d 上未表现出显著差异，不能简单假设大维护一定优于中维护。,用于说明中/大维护不能只按短期提升大小排序。
+维护周期衰减,cycle_decay_rate_less_than_zero,"One-sample Wilcoxon signed-rank test, alternative: median < 0",cycle_decay_rate,0.0,4.37423947172168e-20,维护周期内透水率存在显著下降趋势，支持第二问非维护日退化方程。,用于验证非维护日退化项的必要性。
