@@ -7,6 +7,8 @@ import pandas as pd
 
 
 HMAX_MAX_ANNUAL_DROP_RATIO = 0.20
+SERVICE_CAP_SCENARIO = "neutral"
+SERVICE_CAP_YEARS = 15.0
 
 
 def _seasonal_level_map(season_decay: pd.DataFrame) -> dict[int, float]:
@@ -77,6 +79,30 @@ def _limited_hmax_trend(hmax_initial: float, hmax_trend_raw: float) -> tuple[flo
     return limited, 0.5 * limited, annual_drop_ratio
 
 
+def _estimate_global_hmax_damage(events: pd.DataFrame) -> float:
+    if events.empty or "post_level_median_3d" not in events.columns:
+        return math.nan
+    drops: list[float] = []
+    usable = events.copy()
+    if "eligible_plateau" in usable.columns:
+        usable = usable[usable["eligible_plateau"].astype(bool)]
+    usable = usable.dropna(subset=["device_id", "event_date", "post_level_median_3d"])
+    for _, group in usable.sort_values(["device_id", "event_date"]).groupby("device_id"):
+        post = group["post_level_median_3d"].astype(float).to_numpy()
+        if len(post) < 2:
+            continue
+        device_drops = post[:-1] - post[1:]
+        drops.extend(float(value) for value in device_drops if np.isfinite(value) and value > 0)
+    return float(np.median(drops)) if drops else math.nan
+
+
+def _clip_damage_delta(base_value: float, lower: float, upper: float) -> float:
+    safe_upper = max(lower, float(upper))
+    if not np.isfinite(base_value):
+        base_value = lower
+    return float(min(max(float(base_value), lower), safe_upper))
+
+
 def build_model_parameters(outputs: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, dict[str, object]]:
     core = outputs["core"]
     rule = outputs["rule"]
@@ -88,6 +114,8 @@ def build_model_parameters(outputs: dict[str, pd.DataFrame]) -> tuple[pd.DataFra
     seasonal_effect = _seasonal_effect_maps(outputs["seasonal_effect"])
     medium_global_rho = _global_reliable_rho(hmax, "medium")
     major_global_rho = _global_reliable_rho(hmax, "major")
+    global_damage_delta = _estimate_global_hmax_damage(outputs.get("events", pd.DataFrame()))
+    damage_source = "global_hpost_decline_median" if np.isfinite(global_damage_delta) else "minimum_floor"
 
     prediction_start = daily["date"].max() + pd.Timedelta(days=1)
     rows: list[dict[str, object]] = []
@@ -108,6 +136,16 @@ def build_model_parameters(outputs: dict[str, pd.DataFrame]) -> tuple[pd.DataFra
         medium_rho, medium_source, medium_device_reliable = _rho_value_and_source(hmax_row, "medium", medium_global_rho)
         major_rho, major_source, major_device_reliable = _rho_value_and_source(hmax_row, "major", major_global_rho)
         hmax_initial = float(core_row["h_max_initial"])
+        delta_medium = _clip_damage_delta(
+            0.5 * global_damage_delta if np.isfinite(global_damage_delta) else math.nan,
+            0.1,
+            0.02 * hmax_initial,
+        )
+        delta_major = _clip_damage_delta(
+            1.0 * global_damage_delta if np.isfinite(global_damage_delta) else math.nan,
+            0.2,
+            0.04 * hmax_initial,
+        )
         raw_trend = hmax_row.get("hmax_trend_slope_per_day", hmax_row.get("hmax_trend_used", 0.0))
         raw_trend = float(raw_trend) if pd.notna(raw_trend) else 0.0
         hmax_trend_limited, hmax_trend_neutral, hmax_annual_drop_ratio = _limited_hmax_trend(hmax_initial, raw_trend)
@@ -129,6 +167,11 @@ def build_model_parameters(outputs: dict[str, pd.DataFrame]) -> tuple[pd.DataFra
                 "hmax_trend_limited": hmax_trend_limited,
                 "hmax_trend_used": hmax_trend_neutral,
                 "hmax_annual_drop_ratio_used": hmax_annual_drop_ratio / 2.0,
+                "hmax_damage_delta_medium": delta_medium,
+                "hmax_damage_delta_major": delta_major,
+                "hmax_damage_source": damage_source,
+                "service_cap_scenario": SERVICE_CAP_SCENARIO,
+                "service_cap_years": SERVICE_CAP_YEARS,
                 "hmax_scenario": "neutral",
                 "hmax_main_scenario": "neutral",
                 "medium_plateau_gain_used": float(core_row["medium_plateau_gain_median"]),

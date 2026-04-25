@@ -28,8 +28,18 @@ DATE_COLUMNS = {
     "prediction_start_date",
     "first_date_rolling365_below_37",
     "lifetime_end_date",
+    "functional_failure_date",
+    "recovery_failure_date",
+    "maintenance_burden_failure_date",
+    "service_cap_date",
+    "final_lifetime_end_date",
     "extended_first_date_rolling365_below_37",
     "extended_lifetime_end_date",
+    "extended_functional_failure_date",
+    "extended_recovery_failure_date",
+    "extended_maintenance_burden_failure_date",
+    "extended_service_cap_date",
+    "extended_final_lifetime_end_date",
 }
 
 
@@ -225,6 +235,8 @@ def _build_long_life_diagnostics(
         hmax_at_30y = float(param["h_max_initial"]) + float(param["hmax_trend_used"]) * (30 * 365 - 1)
         life_row = lifetime[(lifetime["device_id"] == device_id) & (lifetime["model_name"] == MODEL_MAIN)]
         status = str(life_row["status"].iloc[0]) if len(life_row) else ""
+        final_failure_type = str(life_row["final_failure_type"].iloc[0]) if len(life_row) and "final_failure_type" in life_row else ""
+        burden_flag = bool(burden_flag or final_failure_type == "excessive_maintenance_burden")
         rows.append(
             {
                 "device_id": device_id,
@@ -348,6 +360,11 @@ def main() -> None:
         "hmax_trend_limited",
         "hmax_trend_used",
         "hmax_annual_drop_ratio_used",
+        "hmax_damage_delta_medium",
+        "hmax_damage_delta_major",
+        "hmax_damage_source",
+        "service_cap_scenario",
+        "service_cap_years",
         "hmax_scenario",
         "hmax_main_scenario",
         "medium_plateau_gain_used",
@@ -367,6 +384,7 @@ def main() -> None:
         "maintenance_type",
         "rule_type",
         "rho_used_source",
+        "service_cap_scenario",
         "year",
     ]
     _write_csv(schedule[schedule_columns], paths.q2_tables_dir / "表02_未来维护日程表.csv")

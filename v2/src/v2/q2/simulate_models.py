@@ -21,6 +21,15 @@ MODEL_MAIN_HMAX_ENG = "recovery_ratio_main_hmax_engineering_conservative"
 
 HORIZON_DAYS = 30 * 365
 LIFETIME_TEST_EXTRA_DAYS = 365
+THRESHOLD = 37.0
+COMMISSION_DATE = pd.Timestamp("2022-04-01")
+FAILURE_PRIORITY = {
+    "hmax_depleted": 1,
+    "unrecoverable_below_37": 2,
+    "excessive_maintenance_burden": 3,
+    "functional_failure": 4,
+    "service_cap_reached": 5,
+}
 
 
 def _history_values_for_rolling(daily: pd.DataFrame, device_id: str) -> list[float]:
@@ -61,6 +70,119 @@ def hmax_trend_for_scenario(row: pd.Series, scenario: str) -> tuple[float, float
     trend = float(row.get("hmax_trend_used", 0.0))
     ratio = float(row.get("hmax_annual_drop_ratio_used", 0.0))
     return trend, ratio
+
+
+def _service_age_years(date: pd.Timestamp) -> float:
+    return float((date - COMMISSION_DATE).days / 365.25)
+
+
+def _hmax_raw(row: pd.Series, hmax_trend: float, day_index: int, medium_count: int, major_count: int) -> float:
+    damage = (
+        float(row.get("hmax_damage_delta_medium", 0.0)) * medium_count
+        + float(row.get("hmax_damage_delta_major", 0.0)) * major_count
+    )
+    return float(row["h_max_initial"]) + hmax_trend * day_index - damage
+
+
+def _next_year_max_recoverable(
+    row: pd.Series,
+    hmax_trend: float,
+    day_index: int,
+    date: pd.Timestamp,
+    medium_count: int,
+    major_count: int,
+    helpers: dict[str, object],
+) -> float:
+    damage = (
+        float(row.get("hmax_damage_delta_medium", 0.0)) * medium_count
+        + float(row.get("hmax_damage_delta_major", 0.0)) * major_count
+    )
+    values: list[float] = []
+    for offset in range(366):
+        future_date = date + pd.Timedelta(days=offset)
+        hmax_future = float(row["h_max_initial"]) + hmax_trend * (day_index + offset) - damage
+        seasonal = helpers["seasonal_level"].get(int(future_date.month), 0.0)
+        values.append(hmax_future + seasonal)
+    return float(max(values)) if values else -math.inf
+
+
+def _maintenance_burden_after_add(
+    maintenance_dates: list[pd.Timestamp],
+    current_date: pd.Timestamp,
+) -> tuple[int, float, float, bool]:
+    start = current_date - pd.Timedelta(days=364)
+    dates = sorted([date for date in maintenance_dates if date >= start] + [current_date])
+    count = len(dates)
+    if len(dates) >= 2:
+        intervals = pd.Series(dates).diff().dt.days.dropna().astype(float)
+        avg_interval = float(intervals.mean())
+        min_interval = float(intervals.min())
+    else:
+        avg_interval = math.nan
+        min_interval = math.nan
+    burden = bool(
+        count > 8
+        or (np.isfinite(avg_interval) and avg_interval < 45)
+        or (np.isfinite(min_interval) and min_interval < 30)
+    )
+    return count, avg_interval, min_interval, burden
+
+
+def _maintenance_window_metrics(maintenance_dates: list[pd.Timestamp], current_date: pd.Timestamp) -> tuple[int, float, float]:
+    start = current_date - pd.Timedelta(days=364)
+    dates = sorted([date for date in maintenance_dates if date >= start])
+    count = len(dates)
+    if len(dates) >= 2:
+        intervals = pd.Series(dates).diff().dt.days.dropna().astype(float)
+        return count, float(intervals.mean()), float(intervals.min())
+    return count, math.nan, math.nan
+
+
+def _best_failure(candidates: list[str]) -> str:
+    if not candidates:
+        return ""
+    return sorted(candidates, key=lambda value: FAILURE_PRIORITY[value])[0]
+
+
+def _functional_failure_date(frame: pd.DataFrame, horizon_days: int) -> pd.Timestamp | pd.NaT:
+    if frame.empty or "rolling365_pred" not in frame.columns:
+        return pd.NaT
+    within = frame.iloc[:horizon_days].copy()
+    first_below = within.loc[within["rolling365_pred"].astype(float) < THRESHOLD, "date"]
+    for date in first_below:
+        lookahead = frame[(frame["date"] >= date) & (frame["date"] <= date + pd.Timedelta(days=365))]
+        if len(lookahead) and float(lookahead["rolling365_pred"].max()) < THRESHOLD:
+            return pd.Timestamp(date)
+    return pd.NaT
+
+
+def _truncate_at_final_failure(frame: pd.DataFrame, horizon_days: int) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    out["is_terminal_day"] = out["is_terminal_day"].astype(bool)
+    functional_date = _functional_failure_date(out, horizon_days)
+    terminal_rows = out[out["is_terminal_day"]]
+    terminal_date = pd.Timestamp(terminal_rows["date"].iloc[0]) if len(terminal_rows) else pd.NaT
+    terminal_type = str(terminal_rows["failure_type"].iloc[0]) if len(terminal_rows) else ""
+    final_date = terminal_date
+    final_type = terminal_type
+    if pd.notna(functional_date):
+        if pd.isna(final_date) or functional_date < final_date:
+            final_date = functional_date
+            final_type = "functional_failure"
+        elif functional_date == final_date and FAILURE_PRIORITY["functional_failure"] < FAILURE_PRIORITY.get(final_type, 99):
+            final_type = "functional_failure"
+    if pd.isna(final_date):
+        return out
+    out = out[out["date"] <= final_date].copy()
+    out["is_terminal_day"] = False
+    out["failure_type"] = ""
+    final_idx = out.index[out["date"] == final_date]
+    if len(final_idx):
+        out.loc[final_idx[-1], "is_terminal_day"] = True
+        out.loc[final_idx[-1], "failure_type"] = final_type
+    return out
 
 
 def apply_fixed_gain(
@@ -143,10 +265,35 @@ def simulate_future_paths(
                 last_major_date = prediction_start
                 medium_since_last_major = 0
             event_index = 0
+            medium_count = 0
+            major_count = 0
+            maintenance_dates: list[pd.Timestamp] = []
+            local_path_rows: list[dict[str, object]] = []
+            local_schedule_rows: list[dict[str, object]] = []
+            service_cap_scenario = str(param.get("service_cap_scenario", "neutral"))
+            service_cap_years = float(param.get("service_cap_years", 15.0))
 
             for day_index, date in enumerate(dates):
                 month = int(date.month)
-                hmax_t = max(0.0, float(param["h_max_initial"]) + hmax_trend * day_index)
+                raw_hmax_t = _hmax_raw(param, hmax_trend, day_index, medium_count, major_count)
+                hmax_t = max(0.0, raw_hmax_t)
+                hmax_damage_cumulative = (
+                    float(param.get("hmax_damage_delta_medium", 0.0)) * medium_count
+                    + float(param.get("hmax_damage_delta_major", 0.0)) * major_count
+                )
+                maintenance_count_365d, avg_interval_365d, min_interval_365d = _maintenance_window_metrics(
+                    maintenance_dates, date
+                )
+                service_age = _service_age_years(date)
+                candidates: list[str] = []
+                if raw_hmax_t <= 0:
+                    candidates.append("hmax_depleted")
+                if _next_year_max_recoverable(
+                    param, hmax_trend, day_index, date, medium_count, major_count, helpers
+                ) < THRESHOLD:
+                    candidates.append("unrecoverable_below_37")
+                if service_age >= service_cap_years:
+                    candidates.append("service_cap_reached")
                 maintenance_type, rule_type = decide_maintenance(
                     param,
                     date,
@@ -157,7 +304,21 @@ def simulate_future_paths(
                     use_global_major_fallback=use_global_major_fallback,
                 )
                 rho_used_source = ""
-                if maintenance_type:
+                if maintenance_type and not any(
+                    item in candidates for item in ["hmax_depleted", "unrecoverable_below_37"]
+                ):
+                    projected_count, projected_avg, projected_min, projected_burden = _maintenance_burden_after_add(
+                        maintenance_dates, date
+                    )
+                    if projected_burden:
+                        candidates.append("excessive_maintenance_burden")
+                        maintenance_count_365d = max(projected_count - 1, 0)
+                        avg_interval_365d = projected_avg
+                        min_interval_365d = projected_min
+
+                failure_type = _best_failure(candidates)
+                is_terminal_day = bool(failure_type)
+                if maintenance_type and not is_terminal_day:
                     if model_family == "fixed":
                         x_state = apply_fixed_gain(param, maintenance_type, month, x_state, hmax_t, helpers)
                         rho_used_source = "fixed_gain_model"
@@ -171,15 +332,28 @@ def simulate_future_paths(
                     if maintenance_type == "major":
                         last_major_date = date
                         medium_since_last_major = 0
+                        major_count += 1
                     else:
                         medium_since_last_major += 1
+                        medium_count += 1
+                    maintenance_dates.append(date)
                     event_index += 1
                     record = schedule_record(device_id, event_index, date, maintenance_type, rule_type)
                     record["model_name"] = model_name
                     record["hmax_scenario"] = hmax_scenario
+                    record["service_cap_scenario"] = service_cap_scenario
                     record["rho_used_source"] = rho_used_source
-                    schedule_rows.append(record)
-                else:
+                    local_schedule_rows.append(record)
+                    raw_hmax_t = _hmax_raw(param, hmax_trend, day_index, medium_count, major_count)
+                    hmax_t = max(0.0, raw_hmax_t)
+                    hmax_damage_cumulative = (
+                        float(param.get("hmax_damage_delta_medium", 0.0)) * medium_count
+                        + float(param.get("hmax_damage_delta_major", 0.0)) * major_count
+                    )
+                    maintenance_count_365d, avg_interval_365d, min_interval_365d = _maintenance_window_metrics(
+                        maintenance_dates, date
+                    )
+                elif not is_terminal_day:
                     decay_lambda = helpers["decay_lambda"].get(month, 1.0)
                     x_state = x_state + float(param["cycle_decay_rate_used"]) * decay_lambda
 
@@ -192,10 +366,11 @@ def simulate_future_paths(
                 x_history.append(x_state)
                 if len(x_history) > 60:
                     x_history = x_history[-60:]
-                path_rows.append(
+                local_path_rows.append(
                     {
                         "model_name": model_name,
                         "hmax_scenario": hmax_scenario,
+                        "service_cap_scenario": service_cap_scenario,
                         "device_id": device_id,
                         "date": date,
                         "x_state": x_state,
@@ -208,6 +383,25 @@ def simulate_future_paths(
                         "hmax_t": hmax_t,
                         "hmax_trend_used": hmax_trend,
                         "hmax_annual_drop_ratio_used": hmax_annual_ratio,
+                        "hmax_damage_cumulative": hmax_damage_cumulative,
+                        "service_age_years": service_age,
+                        "maintenance_count_365d": maintenance_count_365d,
+                        "avg_maintenance_interval_365d": avg_interval_365d,
+                        "min_maintenance_interval_365d": min_interval_365d,
+                        "is_terminal_day": is_terminal_day,
+                        "failure_type": failure_type,
                     }
                 )
+                if is_terminal_day:
+                    break
+            local_path = _truncate_at_final_failure(pd.DataFrame(local_path_rows), horizon_years * 365)
+            if not local_path.empty:
+                terminal_dates = local_path.loc[local_path["is_terminal_day"].astype(bool), "date"]
+                if len(terminal_dates):
+                    cutoff = pd.Timestamp(terminal_dates.iloc[0])
+                    local_schedule_rows = [
+                        row for row in local_schedule_rows if pd.Timestamp(row["date"]) <= cutoff
+                    ]
+                path_rows.extend(local_path.to_dict("records"))
+                schedule_rows.extend(local_schedule_rows)
     return pd.DataFrame(path_rows), pd.DataFrame(schedule_rows)
