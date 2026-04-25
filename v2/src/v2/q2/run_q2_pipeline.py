@@ -12,7 +12,13 @@ from .build_parameters import build_model_parameters
 from .lifetime_prediction import build_extended_lifetime_predictions, build_lifetime_predictions
 from .load_q1_outputs import load_q1_outputs
 from .paths import ensure_output_dirs, get_paths
-from .simulate_models import MODEL_FIXED, MODEL_MAIN, simulate_future_paths
+from .simulate_models import (
+    MODEL_FIXED,
+    MODEL_FIXED_HMAX_ENG,
+    MODEL_MAIN,
+    MODEL_MAIN_HMAX_ENG,
+    simulate_future_paths,
+)
 from .write_summary import write_q2_summary
 
 
@@ -151,6 +157,105 @@ def _build_comparison(
     return pd.DataFrame(rows)
 
 
+def _maintenance_burden(intervals: pd.Series, count: int) -> tuple[float, float, float, bool]:
+    annual_count = count / 30.0
+    avg_interval = float(intervals.mean()) if len(intervals) else np.nan
+    min_interval = float(intervals.min()) if len(intervals) else np.nan
+    flag = bool(
+        annual_count > 8
+        or (np.isfinite(avg_interval) and avg_interval < 45)
+        or (np.isfinite(min_interval) and min_interval < 30)
+    )
+    return annual_count, avg_interval, min_interval, flag
+
+
+def _long_life_reason(
+    status: str,
+    current_rolling: float,
+    cycle_decay: float,
+    annual_maintenance: float,
+    hmax_trend: float,
+    rolling_last: float,
+) -> str:
+    if status == "lifetime_end":
+        return "30年内已触发寿命终止"
+    reasons: list[str] = []
+    if np.isfinite(current_rolling) and current_rolling >= 80:
+        reasons.append("当前rolling365水平较高")
+    if np.isfinite(cycle_decay) and cycle_decay > -0.2:
+        reasons.append("周期净衰减较慢")
+    if np.isfinite(annual_maintenance) and annual_maintenance >= 5:
+        reasons.append("当前触发规则下维护频率较高")
+    if np.isfinite(hmax_trend) and hmax_trend > -0.01:
+        reasons.append("Hmax下降趋势较缓")
+    if np.isfinite(rolling_last) and rolling_last >= 37:
+        reasons.append("30年末rolling365仍高于阈值")
+    return "；".join(reasons) if reasons else "30年内未触发寿命终止，综合状态与维护规则仍可维持阈值以上"
+
+
+def _build_long_life_diagnostics(
+    future_paths: pd.DataFrame,
+    schedule: pd.DataFrame,
+    params: pd.DataFrame,
+    lifetime: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    path_main = future_paths[
+        (future_paths["model_name"] == MODEL_MAIN)
+        & (future_paths["hmax_scenario"] == "neutral")
+    ].copy()
+    sched_main = schedule[
+        (schedule["model_name"] == MODEL_MAIN)
+        & (schedule["hmax_scenario"] == "neutral")
+    ].copy()
+    for _, param in params.sort_values("device_id", key=lambda s: s.map(lambda x: int(str(x).replace("a", "")))).iterrows():
+        device_id = str(param["device_id"])
+        device_path = path_main[path_main["device_id"] == device_id].sort_values("date").head(30 * 365)
+        device_sched = sched_main[sched_main["device_id"] == device_id].sort_values("date").copy()
+        device_sched_30y = device_sched[
+            device_sched["date"].isin(set(device_path["date"]))
+        ].sort_values("date")
+        event_count = int(len(device_sched_30y))
+        intervals = pd.to_datetime(device_sched_30y["date"]).diff().dt.days.dropna().astype(float)
+        annual_count, avg_interval, min_interval, burden_flag = _maintenance_burden(intervals, event_count)
+        current_rolling = float(device_path["rolling365_pred"].iloc[0]) if len(device_path) else np.nan
+        rolling_min = float(device_path["rolling365_pred"].min()) if len(device_path) else np.nan
+        rolling_last = float(device_path["rolling365_pred"].iloc[-1]) if len(device_path) else np.nan
+        hmax_at_10y = float(param["h_max_initial"]) + float(param["hmax_trend_used"]) * 3650
+        hmax_at_30y = float(param["h_max_initial"]) + float(param["hmax_trend_used"]) * (30 * 365 - 1)
+        life_row = lifetime[(lifetime["device_id"] == device_id) & (lifetime["model_name"] == MODEL_MAIN)]
+        status = str(life_row["status"].iloc[0]) if len(life_row) else ""
+        rows.append(
+            {
+                "device_id": device_id,
+                "current_state_level": param["current_state_level"],
+                "current_real_rolling365": life_row["current_real_rolling365"].iloc[0] if len(life_row) else np.nan,
+                "cycle_decay_rate_used": param["cycle_decay_rate_used"],
+                "maintenance_interval_median": param["maintenance_interval_median"],
+                "future_maintenance_count_30y": event_count,
+                "annual_maintenance_count_30y": annual_count,
+                "avg_maintenance_interval_30y": avg_interval,
+                "min_maintenance_interval_30y": min_interval,
+                "maintenance_burden_flag": burden_flag,
+                "h_max_initial": param["h_max_initial"],
+                "hmax_trend_used": param["hmax_trend_used"],
+                "hmax_at_10y": max(0.0, hmax_at_10y),
+                "hmax_at_30y": max(0.0, hmax_at_30y),
+                "rolling365_min_30y": rolling_min,
+                "rolling365_last_30y": rolling_last,
+                "long_life_reason": _long_life_reason(
+                    status,
+                    current_rolling,
+                    float(param["cycle_decay_rate_used"]),
+                    annual_count,
+                    float(param["hmax_trend_used"]),
+                    rolling_last,
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _assert_outputs(paths, outputs: dict[str, pd.DataFrame]) -> None:
     expected = [
         paths.q2_tables_dir / "表01_模型参数表.csv",
@@ -160,6 +265,8 @@ def _assert_outputs(paths, outputs: dict[str, pd.DataFrame]) -> None:
         paths.q2_tables_dir / "表05_寿命预测结果表.csv",
         paths.q2_tables_dir / "表06_模型对比汇总表.csv",
         paths.q2_tables_dir / "表07_长期外推参考表.csv",
+        paths.q2_tables_dir / "表08_寿命过长诊断表.csv",
+        paths.q2_tables_dir / "表09_Hmax工程保守敏感性表.csv",
         paths.q2_markdown_dir / "第二问分析总结.md",
     ]
     missing = [str(path) for path in expected if not path.exists()]
@@ -208,6 +315,26 @@ def main() -> None:
         extended_horizon_years=100,
     )
     comparison = _build_comparison(lifetime, params, backtest, schedule)
+    diagnostics = _build_long_life_diagnostics(future_paths, schedule, params, lifetime)
+    engineering_specs = [
+        (MODEL_FIXED_HMAX_ENG, "fixed", "engineering_conservative", False),
+        (MODEL_MAIN_HMAX_ENG, "main", "engineering_conservative", False),
+    ]
+    engineering_paths, _ = simulate_future_paths(
+        params,
+        q1["daily"],
+        helpers,
+        horizon_years=30,
+        include_lifetime_test_extra=True,
+        model_specs=engineering_specs,
+    )
+    engineering_lifetime = build_lifetime_predictions(
+        engineering_paths,
+        params,
+        q1["daily"],
+        helpers["prediction_start"],
+        horizon_years=30,
+    )
 
     _write_csv(params[[
         "device_id",
@@ -248,7 +375,20 @@ def main() -> None:
     _write_csv(lifetime, paths.q2_tables_dir / "表05_寿命预测结果表.csv")
     _write_csv(comparison, paths.q2_tables_dir / "表06_模型对比汇总表.csv")
     _write_csv(extended_lifetime, paths.q2_tables_dir / "表07_长期外推参考表.csv")
-    write_q2_summary(paths, params, schedule, backtest, lifetime, comparison, future_paths, extended_lifetime)
+    _write_csv(diagnostics, paths.q2_tables_dir / "表08_寿命过长诊断表.csv")
+    _write_csv(engineering_lifetime, paths.q2_tables_dir / "表09_Hmax工程保守敏感性表.csv")
+    write_q2_summary(
+        paths,
+        params,
+        schedule,
+        backtest,
+        lifetime,
+        comparison,
+        future_paths,
+        extended_lifetime,
+        diagnostics,
+        engineering_lifetime,
+    )
     _assert_outputs(paths, {"schedule": schedule, "lifetime": lifetime})
     print("v2 q2 pipeline completed.")
 

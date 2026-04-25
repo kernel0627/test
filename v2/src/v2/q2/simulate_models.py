@@ -16,6 +16,8 @@ MODEL_FIXED_HMAX_OPT = "fixed_gain_baseline_hmax_optimistic"
 MODEL_MAIN_HMAX_OPT = "recovery_ratio_main_hmax_optimistic"
 MODEL_FIXED_HMAX_PESS = "fixed_gain_baseline_hmax_pessimistic"
 MODEL_MAIN_HMAX_PESS = "recovery_ratio_main_hmax_pessimistic"
+MODEL_FIXED_HMAX_ENG = "fixed_gain_baseline_hmax_engineering_conservative"
+MODEL_MAIN_HMAX_ENG = "recovery_ratio_main_hmax_engineering_conservative"
 
 HORIZON_DAYS = 30 * 365
 LIFETIME_TEST_EXTRA_DAYS = 365
@@ -48,6 +50,13 @@ def hmax_trend_for_scenario(row: pd.Series, scenario: str) -> tuple[float, float
     if scenario == "pessimistic":
         trend = float(row.get("hmax_trend_limited", row.get("hmax_trend_used", 0.0)))
         ratio = abs(trend) * 365.0 / max(float(row["h_max_initial"]), 1e-9)
+        return trend, ratio
+    if scenario == "engineering_conservative":
+        hmax_initial = max(float(row["h_max_initial"]), 1e-9)
+        raw = min(0.0, float(row.get("hmax_trend_raw", 0.0)))
+        floor = -0.30 * hmax_initial / 365.0
+        trend = max(raw, floor)
+        ratio = abs(trend) * 365.0 / hmax_initial
         return trend, ratio
     trend = float(row.get("hmax_trend_used", 0.0))
     ratio = float(row.get("hmax_annual_drop_ratio_used", 0.0))
