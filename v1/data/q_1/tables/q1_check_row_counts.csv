@@ -1,0 +1,17 @@
+metric,value
+hourly_rows_after_dedup,114977
+hourly_rows_cleaned,114977
+hourly_missing_raw,4345
+hourly_invalid_physical,0
+hourly_candidate_anomaly,1169
+hourly_excluded_from_analysis,1035
+daily_rows,7377
+daily_high_quality_rows,5442
+daily_low_quality_rows,1404
+daily_insufficient_rows,90
+daily_maintenance_gap_rows,127
+daily_random_gap_rows,314
+event_rows,127
+eligible_event_rows,119
+cycle_rows,117
+eligible_cycle_rows,92

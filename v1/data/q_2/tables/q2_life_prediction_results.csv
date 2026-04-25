@@ -1,0 +1,11 @@
+device_id,current_rolling365,predicted_life_end_date,remaining_life_days,remaining_life_years,life_end_reason,first_date_rolling365_below_37,major_recovery_test_passed,M_i_at_life_test,prediction_interval_low,prediction_interval_high
+a1,82.52665665493839,,,,not_reached_within_50y,,,,,
+a2,57.38951210964351,,,,not_reached_within_50y,,,,,
+a3,65.21437164072239,,,,not_reached_within_50y,,,,,
+a4,90.99026104354958,,,,not_reached_within_50y,,,,,
+a5,67.47105754079153,,,,not_reached_within_50y,,,,,
+a6,78.01377332252,,,,not_reached_within_50y,,,,,
+a7,68.55567161534853,,,,not_reached_within_50y,,,,,
+a8,40.84076873022182,,,,not_reached_within_50y,,,,,
+a9,74.59349050228164,,,,not_reached_within_50y,,,,,
+a10,25.745569733311182,2060-05-25 00:00:00,12462.0,34.14246575342466,rolling365_below_37_and_major_recovery_failed,2060-05-25 00:00:00,False,36.98194485719778,,

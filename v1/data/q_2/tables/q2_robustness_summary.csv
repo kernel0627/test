@@ -1,0 +1,21 @@
+test_type,setting,metric,value,notes
+shrinkage_c,1,mae,10.214568778698801,event_driven backtest
+shrinkage_c,1,rmse,12.765596691371309,event_driven backtest
+shrinkage_c,1,rolling365_mae,1.6000316034201323,event_driven backtest
+shrinkage_c,3,mae,10.50311855521036,event_driven backtest
+shrinkage_c,3,rmse,12.808537513253196,event_driven backtest
+shrinkage_c,3,rolling365_mae,1.5134709959954966,event_driven backtest
+shrinkage_c,5,mae,10.684833067498115,event_driven backtest
+shrinkage_c,5,rmse,12.887928055721751,event_driven backtest
+shrinkage_c,5,rolling365_mae,1.4551041849418065,event_driven backtest
+shrinkage_c,8,mae,10.837368505444754,event_driven backtest
+shrinkage_c,8,rmse,13.003177124025003,event_driven backtest
+shrinkage_c,8,rolling365_mae,1.4002474010496089,event_driven backtest
+shrinkage_c,10,mae,10.90715994090075,event_driven backtest
+shrinkage_c,10,rmse,13.070247630343971,event_driven backtest
+shrinkage_c,10,rolling365_mae,1.3763028349976514,event_driven backtest
+future_rule_type,median_interval_major_ratio,defined,1.0,available deterministic future maintenance rule
+future_rule_type,historical_sequence_cycle,defined,1.0,available deterministic future maintenance rule
+confirmation_window_days,15,defined,15.0,robustness setting only; main rule uses immediate recovery test trigger
+confirmation_window_days,30,defined,30.0,robustness setting only; main rule uses immediate recovery test trigger
+confirmation_window_days,60,defined,60.0,robustness setting only; main rule uses immediate recovery test trigger

@@ -1,0 +1,11 @@
+device_id,predicted_failure_date,remaining_life_days,remaining_life_years,first_date_rolling365_below_37,recovery_test_date,after_major_recovery_success,failure_reason
+a1,,,,,,,not_reached_within_50y
+a2,,,,,,,not_reached_within_50y
+a3,,,,,,,not_reached_within_50y
+a4,,,,,,,not_reached_within_50y
+a5,,,,,,,not_reached_within_50y
+a6,,,,,,,not_reached_within_50y
+a7,,,,,,,not_reached_within_50y
+a8,,,,,,,not_reached_within_50y
+a9,,,,,,,not_reached_within_50y
+a10,2060-05-25 00:00:00,12462.0,34.14246575342466,2060-05-25 00:00:00,2060-05-25 00:00:00,False,rolling365_below_37_and_major_recovery_failed
